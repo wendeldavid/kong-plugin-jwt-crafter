@@ -1,17 +1,14 @@
 local singletons = require "kong.singletons"
 -- local responses = require "kong.tools.responses"
+local groups = require "kong.plugins.acl.groups"
 
 local table_insert = table.insert
 local table_concat = table.concat
 
--- local jwt = require "resty.jwt"
 local cjson = require "cjson"
 
 local asn_sequence = require "kong.plugins.jwt-crafter.asn_sequence"
 local jwt_parser = require "kong.plugins.jwt-crafter.jwt_parser"
-
--- local BasePlugin = require "kong.plugins.base_plugin"
--- local JwtCrafter = BasePlugin:extend()
 
 local plugin = {
   PRIORITY = 900, -- set the plugin priority, which determines plugin execution order
@@ -19,10 +16,17 @@ local plugin = {
 }
 
 local function fetch_acls(consumer_id)
-  local results, err = singletons.dao.acls:find_all {consumer_id = consumer_id}
+  kong.log("fetch acls")
+
+  -- local results, err = singletons.dao.acls:find_all {consumer_id = consumer_id}
+  local authenticated_groups = kong.client.get_credentials()
+  kong.log(cjson.encode(authenticated_groups))
+
+  local results, err = kong.db.consumers:select_by_username("senior.com.br")
   if err then
     return nil, err
   end
+
   return results
 end
 
@@ -56,32 +60,28 @@ end
 -- Executed for every request upon it's reception from a client and before it is being proxied to the upstream service.
 function plugin:access(plugin_conf)
   kong.log("jwt-crafter:access")
+  -- kong.log(cjson.encode())
 
-  local consumer_id = "a1c178f3-4edd-4d9a-a1a7-0e3f09c68817"
+  local consumer = kong.client.load_consumer("senior.com.br", true)
 
-  local jwt = craft_jwt("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c")
+  if consumer then
+    local consumer_id = consumer.id
 
-  kong.service.request.add_header("X-JWT-ASSERTION", cjson.encode(jwt))
+    local acls, err = fetch_acls(consumer_id)
 
-  -- kong.service.request.add_header("X-JWT-ASSERTION",   cjson.encode(
-  --   {
-  --     access_token = "jwt_token",
-  --     token_type = "Bearer",
-  --     expires_in = plugin_conf.expires_in
-  --   }
-  -- )
--- )
+    local jwt = craft_jwt("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c")
+
+    kong.service.request.add_header("X-JWT-ASSERTION", cjson.encode(jwt))
+
+  else
+    kong.response.exit(403, "Cannot identify the consumer, add an authentication plugin to generate JWT token")
+  end
 
 end
 
 return plugin
 
 -- OLD PLUGIN
--- if ngx.ctx.authenticated_credential then
-  --   consumer_id = ngx.ctx.authenticated_credential.consumer_id
-  -- else
-  --   return kong.response.exit(403, "Cannot identify the consumer, add an authentication plugin to generate JWT token")
-  -- end
 
   -- local acls, err = fetch_acls(consumer_id)
 
@@ -122,4 +122,3 @@ return plugin
   --       exp = ngx.time() + config.expires_in
   --     }
   --   }
-  -- )
